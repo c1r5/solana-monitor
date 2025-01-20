@@ -8,7 +8,7 @@ use tokio::{
 };
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::models::Trade;
+use crate::tx::Tx;
 
 pub struct MonitorServer {
     pub listener: TcpListener,
@@ -20,7 +20,7 @@ impl MonitorServer {
         Ok(Self { listener })
     }
 
-    pub async fn init(&self, rx: UnboundedReceiver<Trade>) {
+    pub async fn init(&self, rx: UnboundedReceiver<Tx>) {
         let arc_rx = Arc::new(Mutex::new(rx));
 
         while let Ok((stream, _addr)) = self.listener.accept().await {

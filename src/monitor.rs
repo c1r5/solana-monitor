@@ -1,20 +1,24 @@
+use anchor_client::solana_client::rpc_client::SerializableTransaction;
+use anchor_client::solana_client::rpc_config::RpcBlockSubscribeFilter;
 use anchor_client::{
     solana_client::{
-        nonblocking::pubsub_client::PubsubClient,
-        rpc_config::{RpcTransactionLogsConfig, RpcTransactionLogsFilter},
+        nonblocking::pubsub_client::PubsubClient, rpc_config::RpcBlockSubscribeConfig,
     },
     solana_sdk::commitment_config::CommitmentConfig,
 };
 
-use base64::{prelude::BASE64_STANDARD, Engine};
 use futures::StreamExt;
+use log::info;
+use solana_transaction_status::{
+    option_serializer::OptionSerializer, EncodedTransaction, TransactionDetails,
+    UiTransactionEncoding,
+};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::dex::GenerateData;
 use crate::{
-    constants::accounts::PUMPFUN,
-    logs_parser::LogsParser,
-    models::{self, Trade, TxType},
-    pumpfun::events::Event,
+    dex::{Dex, FromLogs},
+    tx::Tx,
 };
 
 pub struct Monitor {
@@ -28,14 +32,18 @@ impl Monitor {
         }
     }
 
-    pub async fn subscribe(&self, tx: UnboundedSender<Trade>) -> anyhow::Result<()> {
+    pub async fn subscribe(&self, tx: UnboundedSender<Tx>) -> anyhow::Result<()> {
         let pubsub = PubsubClient::new(&self.url).await?;
         let (mut stream, _) = pubsub
-            .logs_subscribe(
-                RpcTransactionLogsFilter::Mentions(vec![PUMPFUN.to_string()]),
-                RpcTransactionLogsConfig {
+            .block_subscribe(
+                RpcBlockSubscribeFilter::All,
+                Some(RpcBlockSubscribeConfig {
                     commitment: Some(CommitmentConfig::confirmed()),
-                },
+                    encoding: Some(UiTransactionEncoding::JsonParsed),
+                    transaction_details: Some(TransactionDetails::Full),
+                    show_rewards: Some(true),
+                    max_supported_transaction_version: Some(0),
+                }),
             )
             .await?;
 
@@ -44,57 +52,55 @@ impl Monitor {
                 break;
             };
 
-            let mut trade = Trade::default();
-
-            let log_messages = response.value.logs;
-            let logs_parser = LogsParser::new(&log_messages);
-            let dex = logs_parser.dex();
-            let data = logs_parser.data();
-
-            if data.is_empty() {
+            let Some(block) = response.value.block else {
                 continue;
-            }
+            };
 
-            trade.signature = response.value.signature;
-            trade.dex = dex.clone();
+            let Some(txs) = block.transactions else {
+                continue;
+            };
 
-            match dex {
-                models::Dex::PUMPFUN => {
-                    let events = data
-                        .iter()
-                        .map(|data| {
-                            let decoded = BASE64_STANDARD.decode(data).unwrap();
-                            Event::parse_event(&decoded)
-                        })
-                        .collect::<Vec<_>>();
+            for e_tx in txs {
+                let Some(meta) = e_tx.meta else {
+                    continue;
+                };
 
-                    for event in events {
-                        match event {
-                            Event::Create(create_event) => {
-                                trade.trader = create_event.user;
-                                trade.mint = create_event.mint;
-                                trade.tx_type = TxType::CREATE;
-                            }
+                let OptionSerializer::Some(logs) = meta.log_messages.to_owned() else {
+                    continue;
+                };
 
-                            Event::Trade(trade_event) => {
-                                trade.trader = trade_event.user;
-                                trade.is_buy = trade_event.is_buy;
-                                trade.mint = trade_event.mint;
-                                trade.sol_amount = Some(trade_event.sol_amount);
-                                trade.token_amount = Some(trade_event.token_amount);
-                                trade.tx_type = TxType::TRADE
-                            }
-                            Event::UNKNOWN => {}
+                let mut trade = Tx::default();
+
+                match &e_tx.transaction {
+                    EncodedTransaction::Json(ui_transaction) => {
+                        if let Some(signature) = ui_transaction.signatures.first() {
+                            trade.signature = signature.to_string()
+                        }
+                    }
+                    EncodedTransaction::Accounts(ui_accounts_list) => {
+                        if let Some(signature) = ui_accounts_list.signatures.first() {
+                            trade.signature = signature.to_string()
+                        }
+                    }
+
+                    _ => {
+                        if let Some(v_tx) = e_tx.transaction.decode() {
+                            trade.signature = v_tx.get_signature().to_string();
                         }
                     }
                 }
-                models::Dex::RAYDIUM => {}
-                models::Dex::UNKNOWN => {}
-            }
 
-            if let Err(send_err) = tx.send(trade) {
-                eprintln!("{}", send_err)
-            };
+                let dex = Dex::from_logs(&logs);
+                let data = dex.data(&logs);
+
+                if data.is_empty() {
+                    continue;
+                }
+
+                if let Err(send_err) = tx.send(trade) {
+                    eprintln!("{}", send_err)
+                };
+            }
         }
 
         Ok(())

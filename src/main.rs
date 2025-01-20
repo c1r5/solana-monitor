@@ -5,11 +5,11 @@ use monitor::Monitor;
 use server::MonitorServer;
 
 mod constants;
-mod logs_parser;
-mod models;
+mod dex;
 mod monitor;
 mod pumpfun;
 mod server;
+mod tx;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -31,14 +31,6 @@ async fn main() -> anyhow::Result<()> {
                 // eprintln!("No trade in channel");
                 break;
             };
-
-            match trade.dex {
-                models::Dex::PUMPFUN => {
-                    server_tx.send(trade)?;
-                }
-                models::Dex::RAYDIUM => {}
-                models::Dex::UNKNOWN => {}
-            }
         }
 
         Ok(())
@@ -51,4 +43,21 @@ async fn main() -> anyhow::Result<()> {
     let _ = tokio::join!(subscription, receiver, server);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    
+
+    use crate::dex::{Dex, FromLogs, GenerateData};
+
+    #[test]
+    fn decode_raylog() {
+        let logs = vec![
+            "Program log: ray_log: A+0tMAMgAAAAKWGzAgAAAAABAAAAAAAAAO0tMAMgAAAAmbRGwxIAAABuYLyWuL0AAJLrJwMAAAAA"
+        ];
+
+        let dex = Dex::from_logs(&logs);
+        let data = dex.data(&logs);
+    }
 }

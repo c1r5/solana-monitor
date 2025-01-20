@@ -2,24 +2,18 @@ use anchor_client::solana_sdk::pubkey::Pubkey;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub enum Dex {
-    PUMPFUN,
-    RAYDIUM,
-    #[default]
-    UNKNOWN,
-}
+use crate::dex::Dex;
 
 #[derive(Default, Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum TxType {
     CREATE,
-    TRADE,
+    SWAP,
     #[default]
     UNKNOWN,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Trade {
+pub struct Tx {
     pub signature: String,
     pub dex: Dex,
     pub trader: Pubkey,
@@ -30,7 +24,7 @@ pub struct Trade {
     pub token_amount: Option<u64>,
 }
 
-impl Default for Trade {
+impl Default for Tx {
     fn default() -> Self {
         Self {
             signature: Default::default(),
@@ -45,7 +39,7 @@ impl Default for Trade {
     }
 }
 
-impl ToString for Trade {
+impl ToString for Tx {
     fn to_string(&self) -> String {
         let trade = json!({
             "signature":self.signature,
